@@ -1,0 +1,8 @@
+{
+  "chat_id": null,
+  "reviewers": [
+    {"id": 111111111, "name": "Alice", "username": "alice_dev"},
+    {"id": 222222222, "name": "Bob", "username": "bob_dev"},
+    {"id": 333333333, "name": "Carol"}
+  ]
+}
