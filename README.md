@@ -6,7 +6,7 @@ A Telegram bot for group chats. When someone posts a GitHub PR link (or a GitLab
 - The author of the message is never assigned their own PR. If it's their turn, the bot skips to the next person.
 - If a link was already assigned, the bot ignores it when it's posted again.
 - The bot saves the queue position and the assigned links in `data/state.json`.
-- With GitLab connected, `/my` lists the MRs waiting for your review, and on weekdays at 9:00 and 14:00 the bot posts every unapproved MR in the group, tagging the reviewers.
+- With GitLab connected, the bot also adds the reviewer to the MR in GitLab, `/my` lists the MRs waiting for your review, and on weekdays at 9:00 and 14:00 the bot posts every unapproved MR in the group, tagging the reviewers.
 
 The bot can run in two ways:
 
@@ -21,7 +21,7 @@ The bot can run in two ways:
 | `poll.py` | Runs the bot with long polling and sends the scheduled reminders |
 | `flask_app.py` | Runs the bot as a webhook (PythonAnywhere) |
 | `assigner.py` | Link detection, round-robin choice, reminder schedule, saved state |
-| `gitlab_client.py` | Reads MR status and approvals from GitLab |
+| `gitlab_client.py` | Reads MR status and approvals from GitLab, sets MR reviewers |
 | `set_webhook.py` | Tells Telegram where to send messages, or removes the webhook |
 | `config.json` | Reviewers and the group's chat ID (not in git) |
 | `.env` | Bot token, webhook secret, GitLab token, reminder times (not in git) |
@@ -35,7 +35,9 @@ The bot can run in two ways:
 
 This replaces section 2. The server needs Python 3.10+ and outgoing HTTPS to `api.telegram.org` and to your GitLab.
 
-1. **Create a GitLab token** with the `read_api` scope and at least Reporter access to the projects whose MRs you post. A group access token (group → **Settings → Access tokens**) is best, because it doesn't depend on one person's account. A personal access token of a service user also works.
+1. **Create a GitLab token** with the `api` scope and the Developer role, for the group that holds the projects whose MRs you post. Setting reviewers needs write access; `api` is the narrowest scope that allows it. A group access token (group → **Settings → Access tokens**) is best: it doesn't depend on one person's account, and it only reaches that group's projects. A personal access token of a service user also works.
+
+   If you only want `/my` and the reminders, and not reviewers set in GitLab, a `read_api` token with the Reporter role is enough.
 2. **Get the code and settings:**
    ```bash
    git clone https://github.com/<you>/mr-assigner.git
@@ -123,12 +125,13 @@ This replaces section 2. The server needs Python 3.10+ and outgoing HTTPS to `ap
    {
      "chat_id": -1001234567890,
      "reviewers": [
-       {"id": 111111111, "name": "Alice", "username": "alice_dev"},
+       {"id": 111111111, "name": "Alice", "username": "alice_dev", "gitlab": "alice.s"},
        {"id": 222222222, "name": "Bob"}
      ]
    }
    ```
    - `chat_id` limits the bot to your group. `null` allows any group.
+   - `gitlab` is the person's GitLab username (from their profile URL). With it, the bot adds them as a reviewer on the MR in GitLab. Without it, they're only tagged in Telegram.
    - `username` is optional. Without it, the bot mentions the person by name through their user ID, which still sends them a notification.
    - The queue follows the order of this list.
 3. Click **Reload** on the **Web** tab.
@@ -149,6 +152,10 @@ whoami - my user ID and the chat ID
 ## Reminders
 
 On weekdays at the times in `REMIND_TIMES` (default `09:00,14:00`, in `TIMEZONE`, default `Asia/Almaty`), `poll.py` posts one message to the group listing each reviewer's open MRs with a mention. If nothing is open, it posts nothing. If the bot was down at reminder time, it still sends the reminder when it comes back within the hour. After that, it skips that time.
+
+## Reviewers in GitLab
+
+When a posted link is an MR on `GITLAB_URL` and the chosen reviewer has a `gitlab` username in `config.json`, the bot adds them to the MR's **Reviewers** in GitLab. Reviewers already on the MR are kept. The MR then also shows up in the reviewer's own GitLab "Review requests" list. If GitLab refuses (wrong username, a token without write access, no access to the project), the bot says so in the chat. The Telegram assignment still stands.
 
 ## Review status
 

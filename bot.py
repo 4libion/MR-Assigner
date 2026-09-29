@@ -183,18 +183,38 @@ def handle_links(msg: dict) -> None:
 
     author_id = msg["from"]["id"]
     lines = []
+    picked: list[tuple[str, Reviewer]] = []
     for link in new_links:
         reviewer = pick_reviewer(REVIEWERS, state, author_id)
         if reviewer is None:
             lines.append(f"{html.escape(link)} → no available reviewer")
             continue
         state.assigned[link] = reviewer.id
+        picked.append((link, reviewer))
         lines.append(f"{html.escape(link)} → {mention(reviewer)}")
 
     # Save only after the reply went out, so a failed send doesn't burn a turn.
-    if reply(msg, "Review assigned:\n" + "\n".join(lines)):
-        state.save()
-        log.info("Assigned: %s (author %s)", "; ".join(lines), author_id)
+    if not reply(msg, "Review assigned:\n" + "\n".join(lines)):
+        return
+    state.save()
+    log.info("Assigned: %s (author %s)", "; ".join(lines), author_id)
+    set_gitlab_reviewers(msg, picked)
+
+
+def set_gitlab_reviewers(msg: dict, picked: list[tuple[str, Reviewer]]) -> None:
+    """Add the picked reviewers to their MRs in GitLab; say in the chat if that fails."""
+    if GITLAB is None:
+        return
+    failed = [
+        link
+        for link, reviewer in picked
+        if GITLAB.tracks(link) and reviewer.gitlab
+        and not GITLAB.add_reviewer(link, reviewer.gitlab)
+    ]
+    if failed:
+        reply(msg, "Couldn't set the reviewer in GitLab for:\n" + "\n".join(
+            html.escape(link) for link in failed
+        ))
 
 
 def handle_update(update: dict) -> None:

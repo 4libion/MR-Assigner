@@ -26,7 +26,8 @@ LINK_RE = re.compile(
 class Reviewer:
     id: int
     name: str
-    username: str | None = None
+    username: str | None = None  # Telegram
+    gitlab: str | None = None  # GitLab username, to set them as the MR's reviewer
 
 
 def extract_links(text: str) -> list[str]:

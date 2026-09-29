@@ -21,6 +21,8 @@ class FakeGitLab:
 
     def __init__(self):
         self.status: dict[str, bool | None] = {}
+        self.reviewers: list[tuple[str, str]] = []
+        self.fail_add = False
 
     def tracks(self, link):
         return link.startswith(MR)
@@ -28,13 +30,17 @@ class FakeGitLab:
     def is_done(self, link):
         return self.status.get(link, False)
 
+    def add_reviewer(self, link, username):
+        self.reviewers.append((link, username))
+        return not self.fail_add
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     config = {
         "chat_id": -100,
         "reviewers": [
-            {"id": 1, "name": "Alice", "username": "alice"},
+            {"id": 1, "name": "Alice", "username": "alice", "gitlab": "alice.gl"},
             {"id": 2, "name": "Bob"},
         ],
     }
@@ -182,3 +188,21 @@ def test_reminder_retried_when_telegram_down(client, monkeypatch):
     monkeypatch.setattr(client.bot, "call_api", real)
     client.bot.remind_if_due(MONDAY_9_05.replace(minute=6))
     assert client.sent[-1]["text"].startswith("MRs waiting for review")
+
+
+def test_sets_reviewer_in_gitlab(client):
+    post(client, f"{MR}1 {MR}2 https://github.com/o/r/pull/3")  # Alice, Bob (no gitlab name), Alice
+    assert client.bot.GITLAB.reviewers == [(f"{MR}1", "alice.gl")]
+    assert len(client.sent) == 1
+
+
+def test_reports_gitlab_reviewer_failure(client):
+    client.bot.GITLAB.fail_add = True
+    post(client, f"{MR}1")
+    assert client.sent[-1]["text"] == f"Couldn't set the reviewer in GitLab for:\n{MR}1"
+
+
+def test_no_gitlab_reviewer_when_reply_fails(client, monkeypatch):
+    monkeypatch.setattr(client.bot, "call_api", lambda method, **p: {"ok": False})
+    post(client, f"{MR}1")
+    assert client.bot.GITLAB.reviewers == []

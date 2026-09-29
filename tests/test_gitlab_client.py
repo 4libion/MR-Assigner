@@ -50,3 +50,31 @@ def test_approved_or_merged_mr_is_done(monkeypatch):
 
 def test_api_error_gives_unknown(monkeypatch):
     assert gitlab(monkeypatch, {API: Resp({}, status=404)}).is_done(LINK) is None
+
+
+USERS = "https://git.corp/gitlab/api/v4/users?username=alice.gl"
+
+
+def gitlab_with_put(monkeypatch, reviewers, users=({"id": 5},)):
+    gl = gitlab(monkeypatch, {API: Resp({"reviewers": reviewers}), USERS: Resp(list(users))})
+    puts = []
+    monkeypatch.setattr(gl.session, "put", lambda url, json, timeout: puts.append((url, json)) or Resp({}))
+    return gl, puts
+
+
+def test_add_reviewer_keeps_existing(monkeypatch):
+    gl, puts = gitlab_with_put(monkeypatch, [{"id": 3}])
+    assert gl.add_reviewer(LINK, "alice.gl") is True
+    assert puts == [(API, {"reviewer_ids": [3, 5]})]
+
+
+def test_add_reviewer_already_there(monkeypatch):
+    gl, puts = gitlab_with_put(monkeypatch, [{"id": 5}])
+    assert gl.add_reviewer(LINK, "alice.gl") is True
+    assert puts == []
+
+
+def test_add_reviewer_unknown_user(monkeypatch):
+    gl, puts = gitlab_with_put(monkeypatch, [], users=())
+    assert gl.add_reviewer(LINK, "alice.gl") is False
+    assert puts == []
