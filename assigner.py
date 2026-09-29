@@ -44,20 +44,26 @@ def extract_links(text: str) -> list[str]:
 
 
 class State:
-    """Round-robin pointer plus already-assigned links, persisted to JSON."""
+    """Round-robin pointer, assigned links and reviewed links, persisted to JSON."""
 
     def __init__(self, path: Path):
         self.path = path
         self.next_index = 0
         self.assigned: dict[str, int] = {}  # link -> reviewer id
+        self.done: set[str] = set()  # links that were approved, merged or closed
         if path.exists():
             data = json.loads(path.read_text())
             self.next_index = data.get("next_index", 0)
             self.assigned = data.get("assigned", {})
+            self.done = set(data.get("done", []))
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        data = {"next_index": self.next_index, "assigned": self.assigned}
+        data = {
+            "next_index": self.next_index,
+            "assigned": self.assigned,
+            "done": sorted(self.done),
+        }
         # Write atomically so a crash mid-write can't corrupt the state file.
         fd, tmp = tempfile.mkstemp(dir=self.path.parent, suffix=".tmp")
         with os.fdopen(fd, "w") as f:

@@ -1,5 +1,5 @@
 """Telegram bot logic shared by the webhook (flask_app.py) and the long-polling runner (poll.py):
-assigns PR/MR links posted in a group to reviewers round-robin.
+assigns PR/MR links posted in a group to reviewers round-robin, and lists open reviews.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import requests
 from dotenv import load_dotenv
 
 from assigner import Reviewer, State, extract_links, pick_reviewer
+from gitlab_client import GitLab
 
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
@@ -22,6 +23,11 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", BASE_DIR / "config.json"))
 STATE_PATH = Path(os.environ.get("STATE_PATH", BASE_DIR / "data" / "state.json"))
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+GITLAB = (
+    GitLab(os.environ["GITLAB_URL"], os.environ.get("GITLAB_TOKEN", ""))
+    if os.environ.get("GITLAB_URL")
+    else None
+)
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 log = logging.getLogger("mr-assigner")
@@ -102,6 +108,27 @@ def message_links(msg: dict) -> list[str]:
     return extract_links(f"{text} {hidden}")
 
 
+def open_reviews(state: State, reviewer_id: int | None = None) -> dict[int, list[str]]:
+    """Reviewer id -> GitLab MRs assigned to them that aren't approved, merged or closed yet.
+
+    Checks each MR in GitLab and records finished ones in state.done; the caller
+    saves the state. MRs whose status couldn't be read are listed with a note.
+    """
+    result: dict[int, list[str]] = {}
+    for link, rid in state.assigned.items():
+        if link in state.done or (reviewer_id is not None and rid != reviewer_id):
+            continue
+        if not GITLAB.tracks(link):
+            continue
+        done = GITLAB.is_done(link)
+        if done:
+            state.done.add(link)
+            continue
+        line = html.escape(link) + (" (couldn't check status)" if done is None else "")
+        result.setdefault(rid, []).append(line)
+    return result
+
+
 def handle_whoami(msg: dict) -> None:
     user = msg["from"]
     reply(
@@ -122,6 +149,19 @@ def handle_queue(msg: dict) -> None:
     reply(msg, "Queue (next first):\n" + "\n".join(
         f"{i}. {html.escape(r.name)}" for i, r in enumerate(order, 1)
     ))
+
+
+def handle_my(msg: dict) -> None:
+    if GITLAB is None:
+        reply(msg, "GitLab isn't connected, so the bot can't see which MRs are approved.")
+        return
+    state = State(STATE_PATH)
+    links = open_reviews(state, msg["from"]["id"]).get(msg["from"]["id"], [])
+    state.save()
+    if links:
+        reply(msg, "Waiting for your review:\n" + "\n".join(f"• {link}" for link in links))
+    else:
+        reply(msg, "Nothing is waiting for your review.")
 
 
 def handle_links(msg: dict) -> None:
@@ -161,5 +201,7 @@ def handle_update(update: dict) -> None:
         handle_whoami(msg)
     elif cmd == "queue":
         handle_queue(msg)
+    elif cmd == "my":
+        handle_my(msg)
     elif cmd is None:
         handle_links(msg)

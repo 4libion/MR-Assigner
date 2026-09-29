@@ -50,3 +50,10 @@ def test_state_persists(tmp_path):
     s2 = State(path)
     assert s2.next_index == 1
     assert "https://github.com/o/r/pull/1" in s2.assigned
+
+
+def test_state_persists_done(tmp_path):
+    s = State(tmp_path / "s.json")
+    s.done.add("x")
+    s.save()
+    assert State(tmp_path / "s.json").done == {"x"}
