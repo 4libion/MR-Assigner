@@ -1,8 +1,9 @@
-"""Point Telegram at the webhook, or show its status.
+"""Point Telegram at the webhook, show its status, or remove it (needed before poll.py).
 
 Usage:
     python set_webhook.py https://<username>.pythonanywhere.com/webhook
     python set_webhook.py --info
+    python set_webhook.py --delete
 """
 
 import json
@@ -21,6 +22,8 @@ if len(sys.argv) != 2:
 
 if sys.argv[1] == "--info":
     resp = requests.get(f"{API_URL}/getWebhookInfo", timeout=10)
+elif sys.argv[1] == "--delete":
+    resp = requests.post(f"{API_URL}/deleteWebhook", timeout=10)
 else:
     resp = requests.post(
         f"{API_URL}/setWebhook",

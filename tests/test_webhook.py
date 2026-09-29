@@ -26,7 +26,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("WEBHOOK_SECRET", SECRET)
     monkeypatch.setenv("CONFIG_PATH", str(tmp_path / "config.json"))
     monkeypatch.setenv("STATE_PATH", str(tmp_path / "data" / "state.json"))
+    sys.modules.pop("bot", None)
     sys.modules.pop("flask_app", None)
+    import bot
     import flask_app
 
     sent = []
@@ -37,9 +39,10 @@ def client(tmp_path, monkeypatch):
         sent.append(params)
         return {"ok": True}
 
-    monkeypatch.setattr(flask_app, "call_api", fake_call_api)
+    monkeypatch.setattr(bot, "call_api", fake_call_api)
     c = flask_app.app.test_client()
     c.sent = sent
+    c.bot = bot
     return c
 
 
@@ -90,18 +93,14 @@ def test_commands(client):
 
 
 def test_failed_send_does_not_consume_turn(client, monkeypatch):
-    import flask_app
-
-    monkeypatch.setattr(flask_app, "call_api", lambda method, **p: {"ok": False})
+    monkeypatch.setattr(client.bot, "call_api", lambda method, **p: {"ok": False})
     post(client, "https://github.com/o/r/pull/1")
     assert not Path(os.environ["STATE_PATH"]).exists()
 
 
 def test_telegram_down_asks_for_retry(client, monkeypatch):
-    import flask_app
-
     def down(method, **p):
-        raise flask_app.RetryLater("down")
+        raise client.bot.RetryLater("down")
 
-    monkeypatch.setattr(flask_app, "call_api", down)
+    monkeypatch.setattr(client.bot, "call_api", down)
     assert post(client, "https://github.com/o/r/pull/1").status_code == 503

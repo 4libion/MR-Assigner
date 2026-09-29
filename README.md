@@ -7,15 +7,20 @@ A Telegram bot for group chats. When someone posts a GitHub PR link (or a GitLab
 - If a link was already assigned, the bot ignores it when it's posted again.
 - The bot saves the queue position and the assigned links in `data/state.json`.
 
-It runs as a small Flask app. Telegram sends each group message to `/webhook` (a webhook), and the app replies through the Bot API. This fits the free tier of [PythonAnywhere](https://www.pythonanywhere.com), which needs no card.
+The bot can run in two ways:
+
+- **On a server in the company network** (`poll.py`). The bot asks Telegram for new messages itself (long polling), so the server needs outgoing access to `api.telegram.org` and no public address. See [Run on an internal server](#run-on-an-internal-server).
+- **On [PythonAnywhere](https://www.pythonanywhere.com)** (`flask_app.py`), free and needs no card. Telegram sends each group message to `/webhook`.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `flask_app.py` | Receives messages from Telegram and replies |
+| `bot.py` | Handles messages and commands |
+| `poll.py` | Runs the bot with long polling |
+| `flask_app.py` | Runs the bot as a webhook (PythonAnywhere) |
 | `assigner.py` | Link detection, round-robin choice, saved state |
-| `set_webhook.py` | Tells Telegram where to send messages |
+| `set_webhook.py` | Tells Telegram where to send messages, or removes the webhook |
 | `config.json` | Reviewers and the group's chat ID (not in git) |
 | `.env` | Bot token and webhook secret (not in git) |
 
@@ -23,6 +28,49 @@ It runs as a small Flask app. Telegram sends each group message to `/webhook` (a
 
 1. In [@BotFather](https://t.me/BotFather), run `/newbot` and copy the token.
 2. Let the bot read group messages: `/setprivacy` → pick your bot → **Disable**. Do this before adding the bot to the group; if it's already there, remove it and add it back.
+
+## Run on an internal server
+
+This replaces section 2. The server needs Python 3.10+ and outgoing HTTPS to `api.telegram.org`.
+
+1. **Get the code and settings:**
+   ```bash
+   git clone https://github.com/<you>/mr-assigner.git
+   cd mr-assigner
+   python3 -m venv .venv
+   .venv/bin/pip install -r requirements.txt
+   cp .env.example .env
+   nano .env    # BOT_TOKEN
+   ```
+   Copy `config.json` and `data/state.json` from the old server, if there is one, so the queue and assigned links carry over.
+2. **Switch Telegram from webhook to polling.** Telegram delivers messages either to a webhook or to polling, not both. Remove the webhook, then stop the PythonAnywhere web app (**Web** tab → **Disable**):
+   ```bash
+   .venv/bin/python set_webhook.py --delete
+   ```
+3. **Try it:** `.venv/bin/python poll.py`, then send `/queue` in the group. Stop it with Ctrl+C.
+4. **Keep it running** with systemd. Create `/etc/systemd/system/mr-assigner.service`:
+   ```ini
+   [Unit]
+   Description=mr-assigner Telegram bot
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   User=<user>
+   WorkingDirectory=/home/<user>/mr-assigner
+   ExecStart=/home/<user>/mr-assigner/.venv/bin/python poll.py
+   Restart=always
+   RestartSec=10
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now mr-assigner
+   journalctl -u mr-assigner -f    # logs
+   ```
+   After editing `config.json` or `.env`, or after `git pull`, run `sudo systemctl restart mr-assigner`.
 
 ## 2. PythonAnywhere setup
 
@@ -85,7 +133,13 @@ It runs as a small Flask app. Telegram sends each group message to `/webhook` (a
 - `/queue`: shows the reviewer order, with the next reviewer first.
 - `/whoami`: shows your user ID and the chat ID.
 
-## Maintenance
+To show the commands in Telegram's menu, send `/setcommands` to [@BotFather](https://t.me/BotFather) and paste:
+```
+queue - reviewer order
+whoami - my user ID and the chat ID
+```
+
+## Maintenance (PythonAnywhere)
 
 - **Every 3 months**, click **"Run until 3 months from today"** on the **Web** tab. Otherwise the free web app is disabled and the bot stops replying. PythonAnywhere sends a reminder email first.
 - **Team changes:** edit `config.json`, then click **Reload**.
