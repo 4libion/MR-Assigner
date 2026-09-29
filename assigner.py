@@ -10,6 +10,7 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 # GitHub pull requests: https://github.com/<owner>/<repo>/pull/<number>[/files...]
@@ -44,18 +45,21 @@ def extract_links(text: str) -> list[str]:
 
 
 class State:
-    """Round-robin pointer, assigned links and reviewed links, persisted to JSON."""
+    """Round-robin pointer, assigned links and reminder bookkeeping, persisted to JSON."""
 
     def __init__(self, path: Path):
         self.path = path
         self.next_index = 0
         self.assigned: dict[str, int] = {}  # link -> reviewer id
         self.done: set[str] = set()  # links that were approved, merged or closed
+        self.last_reminder: datetime | None = None
         if path.exists():
             data = json.loads(path.read_text())
             self.next_index = data.get("next_index", 0)
             self.assigned = data.get("assigned", {})
             self.done = set(data.get("done", []))
+            if data.get("last_reminder"):
+                self.last_reminder = datetime.fromisoformat(data["last_reminder"])
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,6 +67,7 @@ class State:
             "next_index": self.next_index,
             "assigned": self.assigned,
             "done": sorted(self.done),
+            "last_reminder": self.last_reminder.isoformat() if self.last_reminder else None,
         }
         # Write atomically so a crash mid-write can't corrupt the state file.
         fd, tmp = tempfile.mkstemp(dir=self.path.parent, suffix=".tmp")
@@ -86,4 +91,28 @@ def pick_reviewer(
         if reviewers[idx].id != author_id:
             state.next_index = (idx + 1) % n
             return reviewers[idx]
+    return None
+
+
+def due_reminder(
+    now: datetime, last: datetime | None, times: list[time]
+) -> datetime | None:
+    """Return the reminder slot to send now, or None.
+
+    Slots are the given times on weekdays. The latest slot that has passed is
+    due if it wasn't sent yet and is less than an hour old, so a bot that was
+    down for a while doesn't post a stale reminder when it comes back.
+    """
+    if now.weekday() >= 5:
+        return None
+    passed = [
+        now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+        for t in times
+    ]
+    passed = [slot for slot in passed if slot <= now]
+    if not passed:
+        return None
+    slot = max(passed)
+    if (last is None or last < slot) and now - slot < timedelta(hours=1):
+        return slot
     return None

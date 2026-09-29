@@ -1,5 +1,5 @@
 """Run the bot with long polling: it asks Telegram for new messages itself, so the
-server needs no public address.
+server needs no public address. Also sends the scheduled review reminders.
 
 Usage:
     python poll.py
@@ -21,6 +21,7 @@ def main() -> None:
     bot.log.info("Polling Telegram for updates")
     while True:
         try:
+            bot.remind_if_due()
             result = bot.call_api(
                 "getUpdates", offset=offset, timeout=POLL_SECONDS, allowed_updates=["message"]
             )

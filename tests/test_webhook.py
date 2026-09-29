@@ -1,7 +1,9 @@
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -11,6 +13,7 @@ SECRET = "test-secret"
 HEADERS = {"X-Telegram-Bot-Api-Secret-Token": SECRET}
 GROUP = {"id": -100, "type": "supergroup"}
 MR = "https://gitlab.example.com/team/app/-/merge_requests/"
+MONDAY_9_05 = datetime(2026, 9, 28, 9, 5, tzinfo=ZoneInfo("Asia/Almaty"))
 
 
 class FakeGitLab:
@@ -41,6 +44,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("CONFIG_PATH", str(tmp_path / "config.json"))
     monkeypatch.setenv("STATE_PATH", str(tmp_path / "data" / "state.json"))
     monkeypatch.setenv("GITLAB_URL", "https://gitlab.example.com")
+    monkeypatch.setenv("TIMEZONE", "Asia/Almaty")
+    monkeypatch.setenv("REMIND_TIMES", "09:00,14:00")
     sys.modules.pop("bot", None)
     sys.modules.pop("flask_app", None)
     import bot
@@ -144,3 +149,36 @@ def test_my_notes_unreadable_status(client):
     client.bot.GITLAB.status[f"{MR}1"] = None
     post(client, "/my", user_id=1)
     assert client.sent[-1]["text"].endswith("(couldn't check status)")
+
+
+def test_reminder_once_per_slot(client):
+    post(client, f"{MR}1 {MR}2 {MR}3")  # Alice, Bob, Alice
+    client.bot.GITLAB.status[f"{MR}2"] = True
+    client.sent.clear()
+
+    client.bot.remind_if_due(MONDAY_9_05)
+    client.bot.remind_if_due(MONDAY_9_05.replace(minute=30))
+    assert len(client.sent) == 1
+    msg = client.sent[0]
+    assert msg["chat_id"] == -100 and "reply_parameters" not in msg
+    assert msg["text"] == f"MRs waiting for review:\n\n@alice:\n• {MR}1\n• {MR}3"
+
+
+def test_reminder_skipped_when_nothing_open(client):
+    client.bot.remind_if_due(MONDAY_9_05)
+    assert client.sent == []
+
+
+def test_reminder_retried_when_telegram_down(client, monkeypatch):
+    post(client, f"{MR}1")
+    real = client.bot.call_api
+
+    def down(method, **p):
+        raise client.bot.RetryLater("down")
+
+    monkeypatch.setattr(client.bot, "call_api", down)
+    with pytest.raises(client.bot.RetryLater):
+        client.bot.remind_if_due(MONDAY_9_05)
+    monkeypatch.setattr(client.bot, "call_api", real)
+    client.bot.remind_if_due(MONDAY_9_05.replace(minute=6))
+    assert client.sent[-1]["text"].startswith("MRs waiting for review")

@@ -1,9 +1,10 @@
 import sys
+from datetime import datetime, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from assigner import Reviewer, State, extract_links, pick_reviewer
+from assigner import Reviewer, State, due_reminder, extract_links, pick_reviewer
 
 A, B, C = Reviewer(1, "A"), Reviewer(2, "B"), Reviewer(3, "C")
 
@@ -52,8 +53,26 @@ def test_state_persists(tmp_path):
     assert "https://github.com/o/r/pull/1" in s2.assigned
 
 
-def test_state_persists_done(tmp_path):
+TIMES = [time(9), time(14)]
+MON = datetime(2026, 9, 28)
+
+
+def test_due_reminder_picks_latest_passed_slot():
+    assert due_reminder(MON.replace(hour=8, minute=59), None, TIMES) is None
+    assert due_reminder(MON.replace(hour=9, minute=10), None, TIMES) == MON.replace(hour=9)
+    assert due_reminder(MON.replace(hour=14), MON.replace(hour=9), TIMES) == MON.replace(hour=14)
+
+
+def test_due_reminder_not_twice_or_stale_or_on_weekend():
+    assert due_reminder(MON.replace(hour=9, minute=30), MON.replace(hour=9), TIMES) is None
+    assert due_reminder(MON.replace(hour=10, minute=1), None, TIMES) is None
+    assert due_reminder(datetime(2026, 9, 27, 9, 5), None, TIMES) is None  # Sunday
+
+
+def test_state_persists_reminder_and_done(tmp_path):
     s = State(tmp_path / "s.json")
     s.done.add("x")
+    s.last_reminder = MON.replace(hour=9)
     s.save()
-    assert State(tmp_path / "s.json").done == {"x"}
+    s2 = State(tmp_path / "s.json")
+    assert s2.done == {"x"} and s2.last_reminder == MON.replace(hour=9)

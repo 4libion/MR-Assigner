@@ -6,25 +6,25 @@ A Telegram bot for group chats. When someone posts a GitHub PR link (or a GitLab
 - The author of the message is never assigned their own PR. If it's their turn, the bot skips to the next person.
 - If a link was already assigned, the bot ignores it when it's posted again.
 - The bot saves the queue position and the assigned links in `data/state.json`.
-- With GitLab connected, `/my` lists the MRs waiting for your review.
+- With GitLab connected, `/my` lists the MRs waiting for your review, and on weekdays at 9:00 and 14:00 the bot posts every unapproved MR in the group, tagging the reviewers.
 
 The bot can run in two ways:
 
 - **On a server in the company network** (`poll.py`), needed for the GitLab features when GitLab is internal. The bot asks Telegram for new messages itself (long polling), so the server needs outgoing access to `api.telegram.org` and to GitLab, and no public address. See [Run on an internal server](#run-on-an-internal-server).
-- **On [PythonAnywhere](https://www.pythonanywhere.com)** (`flask_app.py`), free and needs no card. Telegram sends each group message to `/webhook`. The free tier can't reach an internal GitLab, so `/my` doesn't work there.
+- **On [PythonAnywhere](https://www.pythonanywhere.com)** (`flask_app.py`), free and needs no card. Telegram sends each group message to `/webhook`. The free tier can't reach an internal GitLab, so `/my` and the reminders don't work there.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `bot.py` | Handles messages and commands |
-| `poll.py` | Runs the bot with long polling |
+| `bot.py` | Handles messages and commands, sends reminders |
+| `poll.py` | Runs the bot with long polling and sends the scheduled reminders |
 | `flask_app.py` | Runs the bot as a webhook (PythonAnywhere) |
-| `assigner.py` | Link detection, round-robin choice, saved state |
+| `assigner.py` | Link detection, round-robin choice, reminder schedule, saved state |
 | `gitlab_client.py` | Reads MR status and approvals from GitLab |
 | `set_webhook.py` | Tells Telegram where to send messages, or removes the webhook |
 | `config.json` | Reviewers and the group's chat ID (not in git) |
-| `.env` | Bot token, webhook secret, GitLab token (not in git) |
+| `.env` | Bot token, webhook secret, GitLab token, reminder times (not in git) |
 
 ## 1. Telegram setup
 
@@ -45,7 +45,7 @@ This replaces section 2. The server needs Python 3.10+ and outgoing HTTPS to `ap
    cp .env.example .env
    nano .env    # BOT_TOKEN, GITLAB_URL (e.g. https://gitlab.company.kz), GITLAB_TOKEN
    ```
-   Copy `config.json` and `data/state.json` from the old server, if there is one, so the queue and assigned MRs carry over.
+   Copy `config.json` and `data/state.json` from the old server, if there is one, so the queue and assigned MRs carry over. Reminders need `chat_id` set in `config.json`.
 
    If GitLab uses a certificate from an internal CA, add `REQUESTS_CA_BUNDLE=/path/to/ca.pem` to `.env`.
 3. **Switch Telegram from webhook to polling.** Telegram delivers messages either to a webhook or to polling, not both. Remove the webhook, then stop the PythonAnywhere web app (**Web** tab → **Disable**):
@@ -146,9 +146,13 @@ queue - reviewer order
 whoami - my user ID and the chat ID
 ```
 
+## Reminders
+
+On weekdays at the times in `REMIND_TIMES` (default `09:00,14:00`, in `TIMEZONE`, default `Asia/Almaty`), `poll.py` posts one message to the group listing each reviewer's open MRs with a mention. If nothing is open, it posts nothing. If the bot was down at reminder time, it still sends the reminder when it comes back within the hour. After that, it skips that time.
+
 ## Review status
 
-An MR counts as reviewed once anyone approves it, or when it's merged or closed. The bot checks this in GitLab and stops tracking it. Only MRs on `GITLAB_URL` are tracked, so GitHub links still get a reviewer but don't appear in `/my`. If GitLab doesn't answer, the MR is listed with "couldn't check status". If every MR shows this, check the token and its project access.
+An MR counts as reviewed once anyone approves it, or when it's merged or closed. The bot checks this in GitLab and stops tracking it. Only MRs on `GITLAB_URL` are tracked, so GitHub links still get a reviewer but don't appear in `/my` or the reminders. If GitLab doesn't answer, the MR is listed with "couldn't check status". If every MR shows this, check the token and its project access.
 
 ## Maintenance (PythonAnywhere)
 

@@ -1,5 +1,5 @@
 """Telegram bot logic shared by the webhook (flask_app.py) and the long-polling runner (poll.py):
-assigns PR/MR links posted in a group to reviewers round-robin, and lists open reviews.
+assigns PR/MR links posted in a group to reviewers round-robin, and reminds them about open reviews.
 """
 
 from __future__ import annotations
@@ -8,12 +8,14 @@ import html
 import json
 import logging
 import os
+from datetime import datetime, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
 
-from assigner import Reviewer, State, extract_links, pick_reviewer
+from assigner import Reviewer, State, due_reminder, extract_links, pick_reviewer
 from gitlab_client import GitLab
 
 BASE_DIR = Path(__file__).parent
@@ -23,6 +25,12 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", BASE_DIR / "config.json"))
 STATE_PATH = Path(os.environ.get("STATE_PATH", BASE_DIR / "data" / "state.json"))
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+TIMEZONE = ZoneInfo(os.environ.get("TIMEZONE", "Asia/Almaty"))
+REMIND_TIMES = [
+    time.fromisoformat(t.strip())
+    for t in os.environ.get("REMIND_TIMES", "09:00,14:00").split(",")
+    if t.strip()
+]
 GITLAB = (
     GitLab(os.environ["GITLAB_URL"], os.environ.get("GITLAB_TOKEN", ""))
     if os.environ.get("GITLAB_URL")
@@ -34,6 +42,7 @@ log = logging.getLogger("mr-assigner")
 
 config = json.loads(CONFIG_PATH.read_text())
 REVIEWERS = [Reviewer(**r) for r in config["reviewers"]]
+REVIEWERS_BY_ID = {r.id: r for r in REVIEWERS}
 ALLOWED_CHAT_ID: int | None = config.get("chat_id")
 
 _bot_username: str | None = None
@@ -205,3 +214,28 @@ def handle_update(update: dict) -> None:
         handle_my(msg)
     elif cmd is None:
         handle_links(msg)
+
+
+def remind_if_due(now: datetime | None = None) -> None:
+    """Post the open reviews to the group when a reminder slot comes up.
+
+    Raises RetryLater if Telegram is unavailable; the slot stays due and is retried.
+    """
+    if GITLAB is None or ALLOWED_CHAT_ID is None:
+        return
+    now = now or datetime.now(TIMEZONE)
+    state = State(STATE_PATH)
+    slot = due_reminder(now, state.last_reminder, REMIND_TIMES)
+    if slot is None:
+        return
+
+    sections = [
+        f"{mention(REVIEWERS_BY_ID[rid])}:\n" + "\n".join(f"• {link}" for link in links)
+        for rid, links in open_reviews(state).items()
+        if rid in REVIEWERS_BY_ID
+    ]
+    if sections:
+        send(ALLOWED_CHAT_ID, "MRs waiting for review:\n\n" + "\n\n".join(sections))
+    state.last_reminder = slot
+    state.save()
+    log.info("Reminder for %s sent to %d reviewer(s)", slot, len(sections))

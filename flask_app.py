@@ -1,6 +1,6 @@
 """Telegram webhook (Flask): Telegram POSTs every update to /webhook.
 
-Use this when Telegram can reach the server over HTTPS.
+Use this when Telegram can reach the server over HTTPS. Reminders are sent only by poll.py.
 """
 
 from __future__ import annotations
